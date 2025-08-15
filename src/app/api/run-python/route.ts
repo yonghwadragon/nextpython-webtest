@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { spawn } from 'child_process';
-import path from 'path';
-import fs from 'fs';
+
+const RENDER_API_URL = "https://naver-automation-api.onrender.com";
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,82 +13,57 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Python 스크립트 경로 설정
-    const projectRoot = process.cwd();
-    const seleniumPath = path.resolve(projectRoot, '..', 'selenium-naver');
-    const pythonScript = path.join(seleniumPath, 'naver_manual_login.py');
-    const venvPython = path.join(seleniumPath, 'venv', 'Scripts', 'python.exe');
-
-    // 경로 존재 확인
-    console.log('Selenium path:', seleniumPath);
-    console.log('Python script path:', pythonScript);
-    console.log('Venv python path:', venvPython);
+    console.log('Calling Render API...');
     
-    if (!fs.existsSync(pythonScript)) {
+    // Render 서버의 API 호출
+    const response = await fetch(`${RENDER_API_URL}/api/run-naver`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        user_id: 'web_user',
+        action: action
+      })
+    });
+
+    const data = await response.json();
+    
+    if (response.ok) {
+      return NextResponse.json({
+        success: data.success,
+        message: data.message || '네이버 자동화 서버에서 처리 중입니다.',
+        server: 'Render',
+        output: data.output
+      });
+    } else {
       return NextResponse.json(
-        { error: `Python 스크립트를 찾을 수 없습니다: ${pythonScript}` },
-        { status: 404 }
+        { 
+          error: data.message || 'Render 서버에서 오류가 발생했습니다.',
+          details: data.error
+        },
+        { status: response.status }
       );
     }
-    
-    if (!fs.existsSync(venvPython)) {
-      return NextResponse.json(
-        { error: `가상환경 Python을 찾을 수 없습니다: ${venvPython}` },
-        { status: 404 }
-      );
-    }
-
-    // Python 스크립트 실행
-    console.log('Starting Python process...');
-    const pythonProcess = spawn(venvPython, [pythonScript], {
-      cwd: seleniumPath,
-      detached: false, // detached를 false로 변경
-      stdio: ['ignore', 'pipe', 'pipe'] // stdout, stderr 파이프로 연결
-    });
-
-    // 프로세스 출력 로깅
-    pythonProcess.stdout?.on('data', (data) => {
-      console.log('Python stdout:', data.toString());
-    });
-    
-    pythonProcess.stderr?.on('data', (data) => {
-      console.error('Python stderr:', data.toString());
-    });
-    
-    pythonProcess.on('error', (error) => {
-      console.error('Python process error:', error);
-    });
-    
-    pythonProcess.on('close', (code) => {
-      console.log(`Python process closed with code ${code}`);
-    });
-
-    // 짧은 대기 후 프로세스 상태 확인
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    if (pythonProcess.killed) {
-      return NextResponse.json(
-        { error: 'Python 프로세스가 예상치 못하게 종료되었습니다.' },
-        { status: 500 }
-      );
-    }
-
-    return NextResponse.json({
-      success: true,
-      message: '네이버 브라우저가 실행되었습니다.',
-      pid: pythonProcess.pid,
-      paths: {
-        seleniumPath,
-        pythonScript,
-        venvPython
-      }
-    });
 
   } catch (error) {
-    console.error('Python 실행 오류:', error);
+    console.error('Render API 호출 오류:', error);
+    
+    // Render 서버가 슬립 모드일 가능성
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      return NextResponse.json(
+        { 
+          error: 'Render 서버가 슬립 모드입니다. 30초 후 다시 시도해주세요.',
+          details: '무료 서버는 15분 비활성화 후 슬립 상태가 됩니다.',
+          retry: true
+        },
+        { status: 503 }
+      );
+    }
+    
     return NextResponse.json(
       { 
-        error: 'Python 스크립트 실행 중 오류가 발생했습니다.',
+        error: 'Render 서버 연결 실패',
         details: error instanceof Error ? error.message : String(error)
       },
       { status: 500 }
